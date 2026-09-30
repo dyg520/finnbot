@@ -1,0 +1,7 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pycryptodome>=3.20
+python-dotenv>=1.0
+httpx>=0.27
+requests>=2.31
+# jieba>=0.42  # 可选增强：中文分词提升检索质量；装不上会自动降级为字符二元组分词，不影响运行

@@ -1,0 +1,22 @@
+[Unit]
+Description=finnbot 财税智能体后端
+After=network.target
+
+[Service]
+# 按实际部署调整 User 与路径
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/finnbot
+# 环境变量集中放 .env，systemd 通过 EnvironmentFile 注入
+EnvironmentFile=/opt/finnbot/.env
+# 使用 venv 中的 gunicorn；配置文件见 deploy/gunicorn.conf.py
+ExecStart=/opt/finnbot/.venv/bin/gunicorn -c /opt/finnbot/deploy/gunicorn.conf.py main:app
+Restart=always
+RestartSec=3
+# 限制资源，避免异常占用
+LimitNOFILE=65535
+# 不把密钥写进日志
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,30 @@
+# ===== Python 缓存 / 构建 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+
+# ===== 虚拟环境 =====
+.venv/
+venv/
+env/
+
+# ===== 密钥与本地配置（绝不入库）=====
+.env
+*.local
+
+# ===== 运行数据（发票查验记录等，含敏感业务数据）=====
+data/*.db
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
+data/selftest_tmp.db
+
+# ===== 日志 =====
+*.log
+
+# ===== 编辑器 / 系统 =====
+.DS_Store
+.idea/
+.vscode/
+*.swp
