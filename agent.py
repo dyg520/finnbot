@@ -144,8 +144,17 @@ async def invoice_flow(content: str, user_id: str) -> str:
              f"风险等级：{risk['level']}"]
     for r in risk["reasons"]:
         lines.append(f"· {r}")
-    if verify["ok"]:
-        lines.append("查验结果：✅ 已通过第三方查验（以查验平台返回为准）。")
+    # 查验结果展示（含真伪状态与金额一致性）
+    if verify.get("status") == "真票" and verify["ok"]:
+        lines.append("查验结果：✅ 真伪校验通过（查验平台返回为真票）。")
+        cons = verify.get("consistency", {})
+        if cons.get("amount_match") is False:
+            lines.append(f"⚠️ {cons['notes'][0] if cons.get('notes') else '金额不一致'}（请核对后处理）")
+        seller = verify.get("result", {}).get("seller_name")
+        if seller:
+            lines.append(f"销方名称：{seller}")
+    elif verify["ok"]:
+        lines.append(f"查验结果：⚠️ 已返回但状态为「{verify.get('status','未知')}」，请人工复核。")
     elif verify.get("error"):
         lines.append(f"查验：⚠️ {verify['error']}")
     lines.append("提示：以上为辅助校验，报销以贵司财务制度与人工审核为准；确认无误后由财务登记归档。")

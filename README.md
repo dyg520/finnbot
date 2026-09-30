@@ -77,6 +77,13 @@ gunicorn -c deploy/gunicorn.conf.py main:app
 - 记账核算：✅ 已在 `bookkeeping.py` 实现（流水解析 + 科目分类 + 凭证建议，不自动过账），并在 `agent.py` 接入。接入财务软件 API 后可直接读流水。
 - 税务申报：✅ 已在 `tax.py` 实现（简易税额测算 + 申报草稿，强制人工确认），并在 `agent.py` 接入。直连电子税务局门槛高，由人工提交。
 
+### 发票查验接入（选定服务商后 3 步）
+1. 在 `.env` 填 5 项：`INVOICE_PROVIDER`（服务商标识）、`INVOICE_API_BASE`（API 地址）、`INVOICE_API_KEY`、`INVOICE_APP_ID`、`INVOICE_APP_SECRET`。
+2. 打开 `invoice.py` 的 `verify_invoice_aggregator`，按你的服务商文档对齐 **3 处**：① 签名拼接种子（`sign_seed` 那一行）；② 请求路径（`url`）；③ 返回字段映射（`_map_aggregator_result` 里的字段别名）。
+3. `python smoke_test.py` 验收，或企业微信里发 `查验 代码 号码 日期 金额 校验码`。
+
+> 当前为聚合平台（票易通/慧穗/票查查类）标准范式，已含金额一致性自动核对；未配服务商时仍做本地风险校验与引导。
+
 ## 安全红线
 - 所有密钥走 `.env`，绝不入库、不写日志。
 - 身份证/银行卡/税号在输出中掩码。

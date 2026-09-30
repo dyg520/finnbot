@@ -93,24 +93,27 @@ def _mask(s: str) -> str:
 async def verify_invoice_aggregator(fields: dict) -> dict:
     """聚合类发票查验平台参考实现（以 票易通 / 慧穗 / 票查查 等常见形态为例）。
 
-    这类平台通常的接入形态是：HTTPS POST JSON，鉴权用 appKey + timestamp + nonce + sign，
-    其中 sign = MD5(按约定顺序拼接待签名串 + appSecret).toUpperCase()。
+    接入你的服务商只需按注释对齐 3 处：① 签名拼接种子 ② 请求路径 ③ 返回字段映射。
+    其余（HTTPS POST JSON、超时、错误捕获、结果标准化）已通用化。
 
-    由于各服务商在「签名拼接顺序、是否含 nonce、body 字段命名、返回结构」上略有差异，
-    本函数给出**可直接填账号跑通的标准范式**，并把差异点用注释标注。拿到你最终选定的
-    服务商文档后，仅需按注释微调 3 处：① 签名拼接种子；② 请求路径；③ 返回字段提取。
-
-    返回结构：{"ok":bool,"result":{},"error":str}；result 含查验平台返回的发票明细。
+    返回统一结构：
+    {
+      "ok": bool,                          # 查验请求是否成功返回
+      "status": "真票"/"假票"/"异常"/"未知",
+      "result": {发票代码/号码/日期/金额/销方/购方/税率/查验状态},  # 标准化
+      "consistency": {金额是否一致, notes}, # 输入与平台返回的一致性核对（防篡改/输错）
+      "raw": {...}                         # 平台原始返回，便于排查
+    }
     """
     timestamp = str(int(time.time() * 1000))
     nonce = hashlib.md5(f"{timestamp}{INVOICE_APP_SECRET}".encode()).hexdigest()[:16]
 
-    # ① 签名：常见为 MD5(appKey + timestamp + nonce + appSecret) 并转大写。
-    #    不同服务商可能去掉 nonce 或调整顺序，请以文档为准替换下面这一行。
+    # ① 签名：常见 MD5(appKey + timestamp + nonce + appSecret).upper()
+    #    不同服务商可能去掉 nonce 或调整顺序 —— 按你的文档替换这一行
     sign_seed = f"{INVOICE_APP_ID}{timestamp}{nonce}{INVOICE_APP_SECRET}"
     sign = hashlib.md5(sign_seed.encode("utf-8")).hexdigest().upper()
 
-    # ② 请求路径：聚合平台多为 /{provider}/invoice/verify 或 /open/invoice/check，按文档替换
+    # ② 请求路径：聚合平台多为 /{provider}/invoice/verify —— 按文档替换
     url = f"{INVOICE_API_BASE.rstrip('/')}/{INVOICE_PROVIDER}/invoice/verify"
 
     payload = {
@@ -123,7 +126,7 @@ async def verify_invoice_aggregator(fields: dict) -> dict:
         "invoiceDate": fields.get("invoice_date"),     # 开票日期 YYYY-MM-DD
         "amount": fields.get("amount"),                # 价税合计
         "checkCode": fields.get("check_code"),         # 校验码后 6 位（专票必填）
-        # 部分平台需要发票类型 invoiceType（如 01 专票 / 04 普票），按需补充
+        # "invoiceType": "01",  # 如需发票类型（01 专票 / 04 普票）按文档补充
     }
     headers = {"Content-Type": "application/json",
                "Authorization": f"Bearer {INVOICE_API_KEY}"}
@@ -133,13 +136,59 @@ async def verify_invoice_aggregator(fields: dict) -> dict:
             resp = await client.post(url, headers=headers, json=payload)
             resp.raise_for_status()
             data = resp.json()
-
-        # ③ 返回字段兼容：聚合平台多为 {"success":true,"data":{...}} 或 {"code":0,"result":{...}}
-        ok = bool(data.get("success", data.get("code") in (0, "0", "200")))
-        result = data.get("data") or data.get("result") or {}
-        return {"ok": ok, "result": result, "raw": data}
     except Exception as e:
-        return {"ok": False, "error": f"查验请求失败：{e}"}
+        return {"ok": False, "status": "异常", "result": {}, "consistency": {},
+                "raw": {}, "error": f"查验请求失败：{e}"}
+
+    # ③ 返回字段兼容：{"success":true,"data":{...}} 或 {"code":0,"result":{...}}
+    ok = bool(data.get("success", data.get("code") in (0, "0", "200")))
+    raw_result = data.get("data") or data.get("result") or {}
+    standardized = _map_aggregator_result(raw_result)
+    consistency = _check_consistency(fields, standardized)
+    status = ("真票" if (ok and consistency.get("amount_match")) else
+              ("假票" if ok else "未知"))
+    return {"ok": ok, "status": status, "result": standardized,
+            "consistency": consistency, "raw": data}
+
+
+def _map_aggregator_result(r: dict) -> dict:
+    """把不同服务商返回的不同字段命名，映射为统一结构。
+    各服务商字段命名略有差异，按你的文档在此补充别名即可（如 fpdm/fphm 等税控常用字段）。
+    """
+    def pick(*keys):
+        for k in keys:
+            v = r.get(k)
+            if v not in (None, ""):
+                return v
+        return None
+    return {
+        "invoice_code": pick("invoiceCode", "fpdm", "invoice_code"),
+        "invoice_no": pick("invoiceNo", "fphm", "invoice_no"),
+        "invoice_date": pick("invoiceDate", "kprq", "invoice_date"),
+        "amount": pick("amount", "jshj", "totalAmount"),
+        "seller_name": pick("sellerName", "xfmc", "seller_name"),
+        "buyer_name": pick("buyerName", "gfmc", "buyer_name"),
+        "tax_rate": pick("taxRate", "sl", "tax_rate"),
+        "verify_state": pick("state", "yzzt", "verify_state", "status"),
+    }
+
+
+def _check_consistency(input_fields: dict, std: dict) -> dict:
+    """核对输入金额与查验平台返回金额是否一致（防篡改 / 输错）。"""
+    out = {"amount_match": None, "notes": []}
+    a_in = input_fields.get("amount")
+    a_out = std.get("amount")
+    if a_in is not None and a_out is not None:
+        try:
+            match = abs(float(a_in) - float(a_out)) < 0.005
+            out["amount_match"] = match
+            if not match:
+                out["notes"].append(f"金额不一致：输入 {a_in}，查验返回 {a_out}")
+        except (ValueError, TypeError):
+            out["notes"].append("金额格式异常，无法比对")
+    else:
+        out["notes"].append("缺少金额，跳过一致性核对")
+    return out
 
 
 async def verify_invoice(fields: dict) -> dict:
