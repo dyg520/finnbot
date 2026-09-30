@@ -40,9 +40,17 @@ class WXBizMsgCrypt:
     def __init__(self, token: str, encoding_aes_key: str, receive_id: str):
         self.token = token
         self.receive_id = receive_id
-        self.key = base64.b64decode(encoding_aes_key + "=")
-        assert len(self.key) == 32, "EncodingAESKey 解码后必须为 32 字节"
-        self.iv = self.key[:16]
+        # 延迟校验：缺配置（未填 .env）时不崩溃，保证 /health 等接口可用；
+        # 真正加解密时若 key 无效再抛出清晰错误。
+        try:
+            self.key = base64.b64decode(encoding_aes_key + "=")
+        except Exception:
+            self.key = b""
+        if len(self.key) == 32:
+            self.iv = self.key[:16]
+        else:
+            self.key = None
+            self.iv = None
 
     # ---- 签名 ----
     def _signature(self, timestamp: str, nonce: str, encrypt: str) -> str:
@@ -56,6 +64,8 @@ class WXBizMsgCrypt:
 
     # ---- 加密 ----
     def encrypt(self, text: str) -> str:
+        if self.key is None:
+            raise RuntimeError("EncodingAESKey 未正确配置（WECOM_ENCODING_AES 应为 43 位 Base64 字符串）")
         text_bytes = text.encode("utf-8")
         random16 = os.urandom(16)
         msg_len = struct.pack(">I", len(text_bytes))
@@ -67,6 +77,8 @@ class WXBizMsgCrypt:
 
     # ---- 解密 ----
     def decrypt(self, text: str) -> str:
+        if self.key is None:
+            raise RuntimeError("EncodingAESKey 未正确配置（WECOM_ENCODING_AES 应为 43 位 Base64 字符串）")
         encrypted = base64.b64decode(text)
         cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
         raw = cipher.decrypt(encrypted)
